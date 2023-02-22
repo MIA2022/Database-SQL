@@ -1,0 +1,113 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+getwd()
+```
+
+Connect to the database
+```{r}
+library(sqldf)
+fpath=""
+dbfile="MediaDB.db"
+dbcon<-dbConnect(RSQLite::SQLite(), paste0(fpath, dbfile))
+```
+
+Q1
+```{r}
+# Load the "invoice_items" table into a data frame
+rs <- dbGetQuery(dbcon, "SELECT * FROM invoice_items")
+# Add a new column "ExtPrice" to the data frame
+rs$ExtPrice <- rs$Quantity * rs$UnitPrice
+# Calculate the average extended price
+avg_ext_price <- round(mean(rs$ExtPrice), 2)
+# Print the average extended price
+print(avg_ext_price)
+print(rs)
+```
+
+Q2
+```{r}
+result <- sqldf("
+  SELECT 
+    InvoiceId, 
+    SUM(ExtPrice) AS Total,
+    SUM(Quantity) AS NumberOfItems
+  FROM rs
+  GROUP BY InvoiceId
+")
+print(result)
+```
+
+Q3
+```{r}
+library(ggplot2)
+ggplot(result, aes(x = NumberOfItems, y = Total)) + 
+  geom_point() + 
+  xlab("Number of Items") + 
+  ylab("Total") + 
+  ggtitle("Total versus Number of Items")
+```
+
+Q4
+```{r}
+# Check if the DiscPrice column already exists
+column_exists <- "DiscPrice" %in% colnames(rs)
+# Drop the DiscPrice column if it exists
+if(column_exists) {
+  sqldf("ALTER TABLE rs DROP COLUMN DiscPrice")
+}
+# Check if the DiscPrice column exists
+col_exists <- dbExistsTable(dbcon, "invoices") & "DiscPrice" %in% dbListFields(dbcon, "invoices")
+# Drop the DiscPrice column if it exists
+if (col_exists) {
+  dbExecute(dbcon, "ALTER TABLE invoices DROP COLUMN DiscPrice")
+}
+```
+
+
+```{r}
+library(dplyr)
+# adds a new column DiscPrice 
+sqldf("ALTER TABLE result ADD COLUMN DiscPrice REAL")
+#uses a loop to check if the number of items in each invoice is greater than 5, and if so, it updates the DiscPrice column with the discounted amount (10% off the Total column). If the number of items is not greater than 5, the DiscPrice is set to be equal to the Total.
+for (i in 1:nrow(result)) {
+  if (result[i, "NumberOfItems"] > 5) {
+    result[i, "DiscPrice"] <- 0.9 * result[i, "Total"]
+  } else {
+    result[i, "DiscPrice"] <- result[i, "Total"]
+  }
+}
+
+# update the DiscPrice column in the result table
+sqldf("UPDATE result SET DiscPrice = Total * 0.9 WHERE NumberOfItems > 5")
+
+# Load the "invoices" table into a data frame
+invoices_df <- dbGetQuery(dbcon, "SELECT * FROM invoices")
+
+# Add DiscPrice column and InvoiceId column from result to disc_price_df
+disc_price_df <- data.frame(InvoiceId=result$InvoiceId, DiscPrice = result$DiscPrice)
+
+#Add DiscPrice column from disc_price_df to invoices_df based on InvoiceId column
+new_df <- invoices_df %>% left_join(disc_price_df, by = "InvoiceId")
+
+# Add the DiscPrice column to the invoices table
+dbExecute(dbcon, "ALTER TABLE invoices ADD COLUMN DiscPrice NUMERIC")
+
+# Write the disc_price_df data frame to the invoices table
+dbWriteTable(dbcon, "invoices", new_df, overwrite = TRUE)
+```
+
+Q5
+```{r}
+#use the dbGetQuery function to query the database and return a subset of the data
+subset_data_frame <- dbGetQuery(dbcon, "SELECT * FROM invoices LIMIT 10")
+print(subset_data_frame)
+```
+
+
+Disconnect the database
+```{r}
+dbDisconnect(dbcon)
+```

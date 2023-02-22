@@ -1,0 +1,294 @@
+---
+title: "HW6"
+output: html_notebook
+---
+
+```{r}
+getwd()
+```
+
+Connect the database
+```{r}
+library(RSQLite)
+fpath=""
+dbfile="homeworkDB.sqlite"
+dbcon<-dbConnect(RSQLite::SQLite(), paste0(fpath, dbfile))
+```
+
+```{r} 
+dbExecute(dbcon, "PRAGMA foreign_keys = ON")
+```
+
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS affiliations
+```
+
+Create a lookup table for affiliation
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS affiliations (
+  affid INTEGER NOT NULL PRIMARY KEY,
+  affname TEXT NOT NULL
+)
+```
+
+Insert values into lookup table
+```{sql connection=dbcon}
+INSERT INTO affiliations VALUES 
+  (1, "PT"),
+  (2, "FT"),
+  (3, "Contract")
+```
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS authors
+```
+
+Create an Author table
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS authors (
+  aid INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  affiliation TEXT NOT NULL,
+  FOREIGN KEY (affiliation) REFERENCES affiliations (affid)
+)
+```
+
+Insert values into Author table
+```{sql connection=dbcon}
+INSERT INTO authors(name, email, affiliation) VALUES
+  ("Jeff Lohan", "JeffLohan@gmail.com", 3),
+  ("Alison Chu", "AlisonChu@gmail.com", 1),
+  ("Lily Chen", "LilyChen@gmail.com", 2)
+```
+
+Check the Author table
+```{sql connection=dbcon}
+SELECT m.aid AS 'ID', m.name AS 'Name', m.email AS 'Email', r.affname AS 'AFF'
+  FROM authors m INNER JOIN affiliations r ON (m.affiliation=r.affid);
+```
+
+Create log table
+```{sql connection=dbcon}
+CREATE TABLE authorsAuditLog(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  DmlTimestamp datetime NOT NULL,
+  DmlType varchar(10) NOT NULL CHECK (DmlType IN ('INSERT', 'UPDATE', 'DELETE')),
+  OldRowData nvarchar(1000),
+  NewRowData nvarchar(1000)
+)
+```
+
+Create delete trigger
+```{sql connection=dbcon}
+CREATE TRIGGER on_authors_delete_trigger 
+AFTER DELETE
+ON authors
+BEGIN
+  INSERT INTO authorsAuditLog(
+    DmlType,
+    OldRowData,
+    NewRowData,
+    DmlTimestamp
+  ) 
+  values(
+    "DELETE",
+    ("{Name:" || old.name || " Email:" || old.email || " Affiliation:" ||
+      (SELECT r.affname FROM affiliations r WHERE (old.affiliation =r.affid)) || "}"
+    ),
+    NULL,
+    DATETIME('NOW')
+  );
+END;
+```
+
+Original Author tabel
+```{sql connection=dbcon}
+SELECT m.aid AS 'ID', m.name AS 'Name', m.email AS 'Email', r.affname AS 'AFF'
+  FROM authors m INNER JOIN affiliations r ON (m.affiliation=r.affid);
+```
+
+Delete one authors
+```{sql connection=dbcon}
+DELETE FROM authors WHERE aid=1
+```
+
+New Authors table
+```{sql connection=dbcon}
+SELECT m.aid AS 'ID', m.name AS 'Name', m.email AS 'Email', r.affname AS 'AFF'
+  FROM authors m INNER JOIN affiliations r ON (m.affiliation=r.affid);
+```
+A 'DELETE' record is added into authorsAuditLog table
+```{sql connection=dbcon}
+SELECT * FROM authorsAuditLog;
+```
+Create insert trigger
+```{sql connection=dbcon}
+CREATE TRIGGER on_authors_insert_trigger 
+BEFORE INSERT
+ON authors
+BEGIN
+  INSERT INTO authorsAuditLog(
+    DmlType,
+    OldRowData,
+    NewRowData,
+    DmlTimestamp
+  ) 
+  values(
+    "INSERT",
+    NULL,
+    ("{Name:" || new.name || " Email:" || new.email || " Affiliation:" ||
+      (SELECT r.affname FROM affiliations r WHERE (new.affiliation =r.affid)) || "}"
+    ),
+    DATETIME('NOW')
+  );
+END;
+```
+
+Insert an author record
+```{sql connection=dbcon}
+INSERT INTO authors(name, email, affiliation) VALUES
+  ("Lucy Zhou", "LucyZhou@gmail.com", 1)
+```
+
+New Authors table
+```{sql connection=dbcon}
+SELECT m.aid AS 'ID', m.name AS 'Name', m.email AS 'Email', r.affname AS 'AFF'
+  FROM authors m INNER JOIN affiliations r ON (m.affiliation=r.affid);
+```
+A 'INSERT' record is added into authorsAuditLog table
+```{sql connection=dbcon}
+SELECT * FROM authorsAuditLog;
+```
+Create update trigger
+```{sql connection=dbcon}
+CREATE TRIGGER on_authors_update_trigger 
+AFTER UPDATE
+ON authors
+BEGIN
+  INSERT INTO authorsAuditLog(
+    DmlType,
+    OldRowData,
+    NewRowData,
+    DmlTimestamp
+  ) 
+  values(
+    "UPDATE",
+    ("{Name:" || old.name || " Email:" || old.email || " Affiliation:" ||
+      (SELECT r.affname FROM affiliations r WHERE (old.affiliation =r.affid)) || "}"
+    ),
+    ("{Name:" || new.name || " Email:" || new.email || " Affiliation:" ||
+      (SELECT r.affname FROM affiliations r WHERE (new.affiliation =r.affid)) || "}"
+    ),
+    DATETIME('NOW')
+  );
+END;
+```
+
+Update one author
+```{sql connection=dbcon}
+UPDATE authors SET name="NewName" WHERE name="Alison Chu"
+```
+
+New authors table
+```{sql connection=dbcon}
+SELECT m.aid AS 'ID', m.name AS 'Name', m.email AS 'Email', r.affname AS 'AFF'
+  FROM authors m INNER JOIN affiliations r ON (m.affiliation=r.affid);
+```
+
+A 'UPDATE' record is added into authorsAuditLog table
+```{sql connection=dbcon}
+SELECT * FROM authorsAuditLog;
+```
+
+Create emailCheck trigger
+```{sql connection=dbcon}
+CREATE TRIGGER on_authors_emailCheck_trigger 
+BEFORE 
+INSERT 
+ON authors
+FOR EACH ROW
+BEGIN
+  SELECT
+      CASE
+  -- Check if the new email address is in the correct format
+	      WHEN NEW.email NOT LIKE '%_@_%._%' THEN
+	 -- If the email address is not in the correct format, raise an error
+   	      RAISE (ABORT,'Invalid email address')
+       END;
+END;
+)
+```
+
+
+Insert a row with an invalid email into the authors table.
+SQLite issued an error: “Invalid email address” and aborted the execution of the insert.
+```{sql connection=dbcon}
+INSERT INTO authors(name, email, affiliation) VALUES
+  ("Jeff Lohan", "JeffLohangmail.com", 3)
+```
+
+Insert a row with a valid email.
+```{sql connection=dbcon}
+INSERT INTO authors(name, email, affiliation) VALUES
+  ("Jack Wang", "JackWang@gmail.com", 1)
+```
+
+Because the email is valid, the insert statement executed successfully.
+```{sql connection=dbcon}
+SELECT m.aid AS 'ID', m.name AS 'Name', m.email AS 'Email', r.affname AS 'AFF'
+  FROM authors m INNER JOIN affiliations r ON (m.affiliation=r.affid);
+```
+
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS modules
+```
+
+Create a Module table
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS modules (
+  number TEXT NOT NULL PRIMARY KEY,
+  title TEXT NOT NULL,
+  lengthInMin INTEGER NOT NULL
+)
+```
+
+Insert values into Module table
+```{sql connection=dbcon}
+INSERT INTO modules(number, title, lengthInMin) VALUES
+  ("A","math", "50"),
+  ("B", "database", "100")
+```
+
+Test module table
+```{sql connection=dbcon}
+SELECT * FROM modules;
+```
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS AuthorModule
+```
+
+Create a AuthorModule/junction table
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS AuthorModule
+(
+    aid INTEGER NOT NULL,
+    number TEXT,
+    CONSTRAINT PK_AuthorModule PRIMARY KEY
+    (
+        aid,
+        number
+    ),
+    FOREIGN KEY (number) REFERENCES modules (number),
+    FOREIGN KEY (aid) REFERENCES authors (aid)
+)
+```
+
+Disconnect the database
+```{r}
+dbDisconnect(dbcon)
+```
+

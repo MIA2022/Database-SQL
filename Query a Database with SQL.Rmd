@@ -1,0 +1,105 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+getwd()
+```
+
+Connect the database
+```{r}
+library(RSQLite)
+fpath=""
+dbfile="MediaDB.db"
+dbcon<-dbConnect(RSQLite::SQLite(), paste0(fpath, dbfile))
+```
+
+
+Q1:The last names, city, and state of all customer who made at least one purchase
+```{sql connection=dbcon}
+select c.LastName, c.City, c.State 
+from customers c inner join invoices i 
+on c.CustomerId=i.CustomerId
+group by c.CustomerId
+```
+
+Q2:The titles of each albums and the number of tracks on each album
+```{sql connection=dbcon}
+select a.Title, count(t.TrackId) as No_Of_Tracks
+from tracks t inner join albums a on t.AlbumId=a.AlbumId
+group by a.Title
+```
+
+Q3: List the number of tracks by media type
+```{sql connection=dbcon}
+select m.Name as 'Media type', count(t.TrackId) as No_Of_Tracks
+from media_types m left join tracks t on m.MediaTypeId=t.MediaTypeId
+group by m.Name
+```
+
+
+Q4:The average age of the employees
+```{sql connection=dbcon}
+select avg((strftime('%s','now') - strftime('%s', BirthDate))/31536000) as 'Average age'
+from employees
+```
+
+Q5:The total number of unique customers for each US state
+ordered alphabetically by state, who made at least one purchase
+```{sql connection=dbcon}
+select c.State as 'State', count(distinct c.CustomerId) as No_of_unique_customers
+from customers c inner join invoices i on c.CustomerId=i.CustomerId
+where 	c.Country='USA'
+group by c.State
+order by c.State
+```
+
+Q6:Customers never made a purchase
+```{sql connection=dbcon}
+select count(*) as No_Of_noPurchase_customer
+from customers c left join invoices i on c.CustomerId=i.CustomerId
+where i.InvoiceId is null
+```
+
+Q7:The number of albums contain the substring "symphony" in the album title
+```{sql connection=dbcon}
+select count(*) as No_Of_Albums from albums
+where Title like '%symphony%';
+```
+
+Q8:The total "time" of all tracks per artist
+```{sql connection=dbcon}
+select art.Name as 'Artist', round(sum(t.Milliseconds)/1000.0/3600, 2) as Time_in_hour
+from albums a
+inner join tracks t on a.AlbumId=t.AlbumId
+inner join artists art on art.ArtistId=a.ArtistId
+group by art.Name
+```
+
+Q9:Which artist(s) published the most tracks, regardless of type and format? List the artist(s) name(s).
+```{sql connection=dbcon}
+select art.Name as 'Artist', count(t.TrackId) as No_Of_Track
+from albums a
+inner join tracks t on a.AlbumId=t.AlbumId
+inner join artists art on art.ArtistId=a.ArtistId
+group by art.Name
+order by No_Of_Track DESC
+limit 1
+```
+
+Q10:Which artists have composed tracks in more than three different genres? List the artists name and the number of distinct genres they have compositions in.
+```{sql connection=dbcon}
+select art.Name as 'Artist', count(distinct g.GenreId) as No_Of_distinct_genres
+from albums a
+inner join tracks t on a.AlbumId=t.AlbumId
+inner join artists art on art.ArtistId=a.ArtistId
+inner join genres g on t.GenreId=g.GenreId
+group by art.Name
+having count(distinct g.GenreId)>3
+```
+
+Disconnect the database
+```{r}
+dbDisconnect(dbcon)
+```

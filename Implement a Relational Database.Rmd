@@ -1,0 +1,119 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+Connect the database
+```{r}
+library(RSQLite)
+fpath="/Users/nanchen/Documents/courses/cs5200/HW/practice/"
+dbfile="homeworkDB.sqlite"
+dbcon<-dbConnect(RSQLite::SQLite(), paste0(fpath, dbfile))
+```
+
+```{r} 
+dbExecute(dbcon, "PRAGMA foreign_keys = ON")
+```
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS affiliations
+```
+
+Create a lookup table for affiliation
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS affiliations (
+  affid INTEGER NOT NULL PRIMARY KEY,
+  affname TEXT NOT NULL
+)
+```
+
+Insert values into lookup table
+```{sql connection=dbcon}
+INSERT INTO affiliations VALUES 
+  (1, "PT"),
+  (2, "FT"),
+  (3, "Contract")
+```
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS authors
+```
+
+Create an Author table
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS authors (
+  aid INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  affiliation TEXT NOT NULL,
+  FOREIGN KEY (affiliation) REFERENCES affiliations (affid)
+)
+```
+
+Insert values into Author table
+```{sql connection=dbcon}
+INSERT INTO authors(name, email, affiliation) VALUES
+  ("Jeff Lohan", "JeffLohan@gmail.com", 3),
+  ("Alison Chu", "AlisonChu@gmail.com", 1),
+  ("Lily Chen", "LilyChen@gmail.com", 2)
+```
+
+// Test Author
+```{sql connection=dbcon}
+SELECT m.name AS 'Name', m.email AS 'Email', r.affname AS 'AFF'
+  FROM authors m INNER JOIN affiliations r ON (m.affiliation=r.affid);
+```
+
+Test author table
+```{sql connection=dbcon}
+SELECT * FROM authors;
+```
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS modules
+```
+
+Create a Module table
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS modules (
+  number TEXT NOT NULL PRIMARY KEY,
+  title TEXT NOT NULL,
+  lengthInMin INTEGER NOT NULL
+)
+```
+
+Insert values into Module table
+```{sql connection=dbcon}
+INSERT INTO modules(number, title, lengthInMin) VALUES
+  ("A","math", "50"),
+  ("B", "database", "100")
+```
+
+Test module table
+```{sql connection=dbcon}
+SELECT * FROM modules;
+```
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS AuthorModule
+```
+
+Create a AuthorModule/junction table
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS AuthorModule
+(
+    aid INTEGER NOT NULL,
+    number TEXT,
+    CONSTRAINT PK_AuthorModule PRIMARY KEY
+    (
+        aid,
+        number
+    ),
+    FOREIGN KEY (number) REFERENCES modules (number),
+    FOREIGN KEY (aid) REFERENCES authors (aid)
+)
+```
+
+Disconnect the database
+```{r}
+dbDisconnect(dbcon)
+```
