@@ -1,0 +1,482 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+connect to local MySQL database
+```{r}
+# Load the packages
+library(RMySQL)
+
+db_user <- 'root'
+db_password <- 'Qazwsx123.'
+db_name <- 'practicum1'
+db_host <- '127.0.0.1' 
+db_port <- 3306
+mydb <-  dbConnect(MySQL(), user = db_user, password = db_password,
+                 dbname = db_name, host = db_host, port = db_port)
+```
+
+```{r} 
+dbExecute(mydb, "SET FOREIGN_KEY_CHECKS=1;")
+```
+
+```{sql connection=mydb}
+DROP TABLE IF EXISTS conditions
+```
+
+Create a lookup table conditions
+```{sql connection=mydb}
+CREATE TABLE IF NOT EXISTS conditions (
+  cid INTEGER NOT NULL PRIMARY KEY,
+  condition_name VARCHAR(50) NOT NULL,
+  explanation VARCHAR(255)
+)
+```
+
+Insert values into lookup table conditions
+```{sql connection=mydb}
+INSERT INTO conditions VALUES 
+  (1, "No Cloud", ""),
+  (2, "Some Cloud", ""),
+  (3, "Overcast", "")
+```
+
+
+```{sql connection=mydb}
+DROP TABLE IF EXISTS airports
+```
+
+Create a table that stores airports and states called airports
+The value of airportName is the data of airport column in csv table.
+The value of state is the data of origin column in csv table.
+```{sql connection=mydb}
+CREATE TABLE IF NOT EXISTS airports (
+  aid INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY ,
+  airportName TEXT NOT NULL,
+  state TEXT NOT NULL,
+  airportCode TEXT
+)
+```
+
+
+```{sql connection=mydb}
+DROP TABLE IF EXISTS incidents
+```
+
+Create a table that stores wildlife strike incidents called incidents
+Assuming that the incidents table has a column named "origin" 
+that references the "aid" column in the airports table
+```{sql connection=mydb}
+CREATE TABLE IF NOT EXISTS incidents (
+  rid INTEGER NOT NULL PRIMARY KEY ,
+  date DATE,
+  origin INTEGER NOT NULL,
+  airline VARCHAR(255) NOT NULL,
+  aircraft VARCHAR(255) NOT NULL,
+  flightPhase VARCHAR(255) 
+      CHECK (flightPhase= 'takeoff' OR flightPhase= 'landing' OR 
+             flightPhase= 'inflight' OR flightPhase= 'unknown'),
+  altitude VARCHAR(255) NOT NULL,
+  conditions INTEGER NOT NULL,
+  warning TINYINT NOT NULL,
+  FOREIGN KEY (origin) REFERENCES airports (aid),
+  FOREIGN KEY (conditions) REFERENCES conditions (cid)
+)
+```
+
+Create  stored procedure to remove all military flights from the database.
+```{sql connection=mydb}
+CREATE PROCEDURE removeMilitaryFlights()
+BEGIN
+  DELETE FROM incidents WHERE airline = 'military';
+END;
+
+```
+
+
+Firstly, Select only the columns("rid", "aircraft", "airport", "flight_date", 
+"airline", "origin", "flight_phase", "sky_conditions", "pilot_warned_flag", 
+"altitude_ft") that are needed from the csv table and stored in bird_strikes data frame.
+Sencondly, remove all rows whose "rid" value in not an integer, "pilot_warned_flag" value
+is not "Y" or "N", "sky_conditions" value is not "Overcast", "Some Cloud" or "No Cloud".
+Then remove all rows with missing values in any column of data frame.
+Finally, manipulate the remaining rows in the data frame.
+
+```{r}
+library(dplyr)
+# Read in the CSV file
+bird_strikes <- read.csv("BirdStrikesData-V2.csv", header = TRUE, stringsAsFactors = FALSE)
+
+# Select only the columns that are needed
+bird_strikes <- bird_strikes[c("rid", "aircraft", "airport", "flight_date", 
+                               "airline", "origin", "flight_phase", "sky_conditions"
+                               , "pilot_warned_flag", "altitude_ft")]
+
+
+# Filter row whose values meet the criteria
+bird_strikes <- bird_strikes %>% 
+                filter(is.integer(rid),
+                       pilot_warned_flag %in% c("Y", "N"),
+                       sky_conditions %in% c("Overcast", "Some Cloud", "No Cloud"))
+
+#Remove rows with missing values in any column of data frame
+bird_strikes <- bird_strikes[complete.cases(bird_strikes), ]
+
+# Loop through each row of the bird_strikes data frame
+for (i in 1:nrow(bird_strikes)) {
+  # Get the values fo "rid", "aircraft", "airport", "flight_date", 
+  #"airline", "origin", "flight_phase", "sky_conditions", 
+  # "pilot_warned_flag", "altitude_ft" for the current row
+  rid_value <- bird_strikes$rid[i]
+  airline_value <- bird_strikes$airline[i]
+  aircraft_value <- bird_strikes$aircraft[i]
+  altitude_ft_value <- bird_strikes$altitude_ft[i]
+  
+  
+  #Code "Landing Roll" as "landing";
+  #Code 'Approach' as 'landing'
+  #code 'Climb' as 'takeoff'
+  #code "Take-off run" as "takeoff"
+  #code "Descent" as "inflight"
+  #code Other flight phases as "unknown"
+  #Harmonize the flight phases to be one of: takeoff, landing, inflight, unknown.
+  flight_phase_value <- bird_strikes$flight_phase[i]
+  if((flight_phase_value=="Landing Roll") | (flight_phase_value=="Approach")){
+    flight_phase_obj<-"landing"
+  }else if((flight_phase_value=="Climb") | (flight_phase_value=="Take-off run")){
+    flight_phase_obj<-"takeoff"
+  }else if(flight_phase_value=="Descent"){
+    flight_phase_obj<-"inflight"
+  }else{
+    flight_phase_obj<-"unknown"
+  }
+  
+  #Make 'warning' a Boolean flag and use TRUE if the pilot was warned, FALSE otherwise.
+  pilot_warned_flag_value <- bird_strikes$pilot_warned_flag[i]
+  if(pilot_warned_flag_value=="Y"){
+    warning_obj <- TRUE;
+  }else if(pilot_warned_flag_value=="N"){
+    warning_obj <- FALSE;
+  }
+  
+  #Only store the date of the incident and store the date as a date type.
+  flight_date_value <- strsplit(bird_strikes$flight_date[i], " ")[[1]][1]
+  date_obj <- strptime(flight_date_value, '%m/%d/%Y')
+  
+  #Escape the single quote character by adding another single quote before it
+  # to prevent errors when running SQL queries
+  airport_value <- bird_strikes$airport[i]
+  airport_value <- gsub("'", "''", airport_value)
+  
+  # Check if the origin is already in the airports table
+  origin_value <- bird_strikes$origin[i]
+  origin_query <- sprintf("SELECT aid FROM airports 
+                          WHERE airportName = '%s' AND state = '%s'", 
+                          airport_value, origin_value)
+  origin_result <- dbGetQuery(mydb, origin_query)
+  
+  
+  # If the airport is not in the airports table, insert it and get the aid
+  if (nrow(origin_result) == 0 ) {
+    airport_query <- sprintf("INSERT INTO airports (airportName, state) 
+                             VALUES ('%s', '%s')", airport_value, origin_value)
+    dbSendQuery(mydb, airport_query)
+    origin_aid <- dbGetQuery(mydb, "SELECT LAST_INSERT_ID()")$`LAST_INSERT_ID()`
+  } else {
+    origin_aid <- origin_result$aid[1]
+  }
+  
+  # Prepare the SQL query to look up the cid value in the conditions table
+  sky_conditions_value <- bird_strikes$sky_conditions[i]
+  conditions_query <- sprintf("SELECT cid FROM conditions WHERE condition_name = '%s'", 
+                              sky_conditions_value)
+  
+  # Execute the query and get the cid value according to lookup table conditions
+  condition_cid <- dbGetQuery(mydb, conditions_query)$cid
+  
+  # Prepare the SQL query to insert data into the incidents table
+  incidents_query <- sprintf("INSERT INTO incidents 
+                              (rid, date, origin, airline, aircraft, flightPhase, altitude, conditions, warning)
+                             VALUES (%d, '%s', %d, '%s', '%s', '%s', '%s', %d, %d)", 
+                             rid_value, 
+                             date_obj, 
+                             origin_aid, 
+                             airline_value,  
+                             aircraft_value,
+                             flight_phase_obj,
+                             altitude_ft_value, 
+                             condition_cid,
+                             as.integer(warning_obj))
+  
+  # Insert data into the incidents table
+  dbSendQuery(mydb, incidents_query)
+  }
+
+# Call the stored procedure to delete military airlines from the incidents table
+delete_military_airlines <- dbSendQuery(mydb, "CALL removeMilitaryFlights()")
+```
+
+Q3:Show that the loading of the data worked by displaying parts of each table 
+```{r}
+# Show the first 10 rows of the airports table
+airports_query <- "SELECT * FROM airports LIMIT 10"
+airports_df <- dbGetQuery(mydb, airports_query)
+print(airports_df)
+
+# Show the first 10 rows of the incidents table
+incidents_query <- "SELECT * FROM incidents LIMIT 10"
+incidents_df <- dbGetQuery(mydb, incidents_query)
+print(incidents_df)
+
+# Show the conditions table
+conditions_query <- "SELECT * FROM conditions"
+conditions_df <- dbGetQuery(mydb, conditions_query)
+print(conditions_df)
+```
+
+Q4: Find the top-10 airlines with the most number of incidents
+```{sql connection=mydb}
+SELECT airline, COUNT(*) AS num_incidents
+FROM incidents
+GROUP BY airline
+ORDER BY num_incidents DESC
+LIMIT 10;
+```
+
+Q5:find the flight phase that had an above average number bird strike incidents
+```{sql connection=mydb}
+SELECT flightPhase, COUNT(*) AS num_incidents
+FROM incidents
+GROUP BY flightPhase
+HAVING COUNT(*) > (
+  SELECT AVG(num_incidents) AS avg_num_incidents 
+  FROM
+  (
+    SELECT flightPhase, COUNT(*) AS num_incidents
+    FROM incidents
+    GROUP BY flightPhase
+  ) a
+)
+
+```
+
+Q6:find the maximum number of bird strike incidents by month (across all years)
+Find the sum of all incidents across all years for each month. 
+Then sort to find the maximum incidents.
+```{sql connection=mydb}
+SELECT MONTH(date) AS month, COUNT(*) AS num_incidents
+FROM incidents
+GROUP BY month
+HAVING num_incidents =(
+  SELECT MAX(num_incidents)
+  FROM 
+  (
+    SELECT MONTH(date) AS month, COUNT(*) AS num_incidents
+    FROM incidents
+    GROUP BY month
+  ) a
+)
+```
+
+Q7:Build a column chart that visualizes the number of 
+bird strikes incidents per year from 2005 to 2011
+```{r}
+library(ggplot2)
+# Create a SQL query that calculates the number of bird strike incidents per year from 2005 to 2011
+sql_query <- "SELECT YEAR(date) AS year, COUNT(*) AS num_incidents
+              FROM incidents
+              WHERE YEAR(date) BETWEEN 2005 AND 2011
+              GROUP BY year
+              ORDER BY year ASC"
+
+# Use dbGetQuery() to execute the SQL query and retrieve the results as a data frame
+bird_strikes_by_year <- dbGetQuery(mydb, sql_query)
+
+# Use ggplot2 to create a column chart
+ggplot(bird_strikes_by_year, aes(x = year, y = num_incidents, fill = factor(year))) +
+  geom_col() +
+  scale_fill_manual(values = c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2")) +
+  labs(x = "Year", y = "Number of Incidents", title = "Bird Strikes Incidents per Year (2005-2011)") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+        axis.title = element_text(size = 12, face = "bold"),
+        axis.text = element_text(size = 10),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 10))
+```
+
+Q8:
+The parameters needed to be passed to the stored procedure:aircraft_value, airport_value,flight_year_value, flight_month_value, flight_day_value, airline_value, origin_value, flight_phase_value, sky_conditions_value, pilot_warned_flag_value,
+altitude_ft_value. After call this stored procedure, if the given parameters meet 
+requirements, new incident will be added into database.
+```{sql connection=mydb}
+CREATE PROCEDURE addNewIncident (
+  IN aircraft_value VARCHAR(255),
+  IN airport_value VARCHAR(255),
+  IN flight_year_value INT,
+  IN flight_month_value INT,
+  IN flight_day_value INT,
+  IN airline_value VARCHAR(255),
+  IN origin_value VARCHAR(255),
+  IN flight_phase_value VARCHAR(255),
+  IN sky_conditions_value VARCHAR(255),
+  IN pilot_warned_flag_value VARCHAR(255),
+  IN altitude_ft_value VARCHAR(255)
+)
+BEGIN
+
+  DECLARE new_cid INT;
+  DECLARE airport_exists INT;
+  DECLARE new_aid INT;
+  DECLARE warning TINYINT;
+  DECLARE max_rid INT DEFAULT 0;
+  DECLARE flight_date DATE;
+  DECLARE flight_phase VARCHAR(50);
+  
+ -- Check if flight_year_value\flight_month_value\flight_day_value are all reasonable values
+  IF (flight_year_value < 1900 OR flight_year_value > YEAR(CURDATE()))  THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Invalid flight_year_value value';
+  END IF;
+  IF (flight_month_value < 1 OR flight_month_value > 12)  THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Invalid flight_month_value value';
+  END IF;
+  IF (flight_day_value < 1 OR flight_day_value > 31)  THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Invalid flight_day_value value';
+  END IF;
+
+  -- Check if "pilot_warned_flag" value if  "Y" or "N"
+  IF pilot_warned_flag_value != "Y" AND pilot_warned_flag_value != "N" THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Invalid pilot_warned_flag value';
+  END IF;
+  
+  -- Check if "sky_conditions" value is "Overcast", "Some Cloud" or "No Cloud"
+  IF sky_conditions_value != "Overcast" 
+      AND sky_conditions_value != "Some Cloud" 
+      AND sky_conditions_value != "No Cloud" THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Invalid sky_conditions value';
+  END IF;
+ 
+ -- Get the cid number from conditions table according to sky_conditions_val
+  SELECT cid INTO new_cid FROM conditions WHERE condition_name = sky_conditions_value;
+  
+  -- Check if airport is already in the airports table
+  SET airport_exists =(SELECT COUNT(*) FROM airports 
+                        WHERE airportName = airport_value AND state = origin_value);
+  -- If airport is not in the airports table, insert it and get the new aid
+  IF airport_exists = 0 THEN
+    INSERT INTO airports (airportName, state) VALUES (airport_value, origin_value);
+    SELECT LAST_INSERT_ID() INTO new_aid;
+  ELSE
+    SELECT aid INTO new_aid FROM airports 
+               WHERE airportName = airport_value AND state = origin_value;
+  END IF;
+  
+  -- Change pilot_warned_flag_value to the TRUE OR FALSE
+  IF pilot_warned_flag_value = "Y" THEN
+    SET warning = 1;
+  ELSE
+    SET warning = 0;
+  END IF;
+  
+  -- Get the maximum rid from the incidents table and add 1 to produce the new rid
+  SELECT MAX(rid) INTO max_rid FROM incidents;
+  SET max_rid = max_rid + 1;
+  
+  -- Get the date object according to the given flight_year_value, flight_month_value, flight_day_value
+  SET flight_date=STR_TO_DATE(CONCAT(flight_year_value, '-', flight_month_value, '-', flight_day_value),'%Y-%m-%d');
+  
+  -- Change the given flight_phase_value to "takeoff, landing, inflight, unknown".
+  SET flight_phase = 
+    CASE
+      WHEN flight_phase_value = 'Landing Roll' OR flight_phase_value = 'Approach' THEN 'landing'
+      WHEN flight_phase_value = 'Climb' OR flight_phase_value = 'Take-off run' THEN 'takeoff'
+      WHEN flight_phase_value = 'Descent' THEN 'inflight'
+      ELSE 'unknown'
+    END;
+  
+  -- Insert the new incident into the incidents table
+  INSERT INTO incidents (rid, date, origin, airline, aircraft, flightPhase, altitude, conditions, warning)
+  VALUES (max_rid, flight_date, new_aid, airline_value, aircraft_value, flight_phase, 
+  altitude_ft_value, new_cid, warning);
+END
+```
+
+Call this stored procedure in R using the RMySQL package.
+Test case 1: No new airport is added
+```{r}
+# Execute the stored procedure--airport already exits
+originAirportsNumber <- dbGetQuery(mydb, "SELECT COUNT(*) FROM airports")
+
+query <- paste("CALL addNewIncident('TEST1', 'JOHN F KENNEDY INTL'
+,2022,3,5,'Delta Air Lines','New York','Landing Roll','Some Cloud', 'Y', '3000')")
+result <- dbSendQuery(mydb, query)
+
+# check if the new record was successfully added
+if (dbGetRowsAffected(result) == 1) {
+  message('New incident added successfully')
+} else {
+  warning('Failed to add new incident')
+}
+
+# Execute a SELECT statement to retrieve the new record
+result <- dbGetQuery(mydb, "SELECT * FROM incidents where aircraft='TEST1'")
+
+#Pring new incident record.
+print(result)
+
+# Execute a SELECT statement to retrieve the new record
+newAirportsNumber <- dbGetQuery(mydb, "SELECT COUNT(*) FROM airports")
+
+# Check if the result is not empty, indicating that the new record was successfully added
+if(newAirportsNumber - originAirportsNumber == 1) {
+  print("New airport was successfully added to the airports table")
+} else if(newAirportsNumber == originAirportsNumber){
+  print("No new airport was added to the airports table")
+}
+```
+
+Test case 2: New airport is added
+```{r}
+# Execute the stored procedure--new airport is added.
+originAirportsNumber <- dbGetQuery(mydb, "SELECT COUNT(*) FROM airports")
+
+query <- paste("CALL addNewIncident('TEST2', 'TEST AIRPORT'
+,2022,3,6,'Delta Air Lines','New York','Landing Roll','No Cloud', 'Y', '5000')")
+result <- dbSendQuery(mydb, query)
+
+# check if the new record was successfully added
+if (dbGetRowsAffected(result) == 1) {
+  message('New incident added successfully')
+} else {
+  warning('Failed to add new incident')
+}
+
+# Execute a SELECT statement to retrieve the new record
+newIncident <- dbGetQuery(mydb, "SELECT * FROM incidents where aircraft='TEST2'")
+
+#Pring new incident record.
+print(newIncident)
+
+# Execute a SELECT statement to retrieve the new airport record
+newAirport <- dbGetQuery(mydb, 
+            "SELECT * FROM airports where airportName='TEST AIRPORT' AND state='New York'")
+
+#Pring new airport record.
+print(newAirport)
+
+# Execute a SELECT statement to retrieve the new record
+newAirportsNumber <- dbGetQuery(mydb, "SELECT COUNT(*) FROM airports")
+
+# Check if the result is not empty, indicating that the new record was successfully added
+if(newAirportsNumber - originAirportsNumber == 1) {
+  print("New airport was successfully added to the airports table")
+} else if(newAirportsNumber == originAirportsNumber){
+  print("No new airport was added to the airports table")
+}
+```
+
+
+```{r}
+dbDisconnect(mydb)
+```
