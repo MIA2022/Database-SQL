@@ -1,0 +1,55 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(RMySQL)
+
+db_user <- 'root'
+db_password <- 'Qazwsx123.'
+db_name <- 'practicum2'
+db_host <- '127.0.0.1'
+db_port <- 3306
+
+mysql_con <- dbConnect(MySQL(), user = db_user, password = db_password, dbname = db_name, host = db_host, port = db_port)
+```
+
+Top ten authors with the most publications.The authorID and authorName are:
+1529	Costa, E E			
+10241	Thomas, E D ED		
+3600	Beckett, A H AH			
+2006	Storb, R R	
+9166	Snyder, S H SH			
+26	Lefkowitz, R J RJ			
+1189	Mandel, P P	25		
+2007	Weiden, P L PL			
+4225	Meister, A A		
+10908	Janssen, P A PA		
+```{sql connection=mysql_con}
+SELECT
+    AuthorID,
+    AuthorName,
+    NumArticles
+FROM
+    AuthorFacts
+ORDER BY
+    NumArticles DESC
+LIMIT 10;
+
+```
+
+Top journal with the most articles per year. Its ISSN and JournalName 
+are "0022-3573" and "The Journal of pharmacy and pharmacology".
+```{sql connection=mysql_con}
+SELECT ISSN, JournalName, AvgNumOfArticlesPerYear
+FROM JournalFacts
+ORDER BY AvgNumOfArticlesPerYear DESC
+LIMIT 1;
+```
+
+
+```{r}
+dbDisconnect(mysql_con)
+```
+
